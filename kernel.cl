@@ -1,3 +1,6 @@
+#define MAX(a, b) ((a > b) ? (a) : (b))
+#define MIN(a, b) ((a < b) ? (a) : (b))
+
 typedef struct __attribute__((packed)) _args {
     float transform[6]; // affine matrix, when applied to warping, this can be derived from the
                         // mapping's jacobian (this should be done per-pixel in reality inside this
@@ -29,6 +32,48 @@ typedef struct __attribute__((packed)) _args {
 //     return pow(x, 1.f / gamma_) * 255.f;
 // }
 
+void clamped_ellipse(float m0, float m1, float m2, float m3, float *abc) {
+    /* find ellipse */
+    const float F0 = fabs(m0 * m3 - m1 * m2);
+    const double F = MAX(0.1, F0 * F0);
+    const float A = (m2 * m2 + m3 * m3) / F;
+    const float B = -2 * (m0 * m2 + m1 * m3) / F;
+    const float C = (m0 * m0 + m1 * m1) / F;
+
+    /* find the angle to rotate ellipse */
+    const float2 v = {C - A, -B};
+    const float lv = length(v);
+    const float v0 = (lv > 1e-2) ? v[0] / lv : 1.f;
+    const float v1 = (lv > 1e-2) ? v[1] / lv : 1.f;
+
+    const float c = sqrt(MAX(0, 1 + v0) / 2);
+    float s = sqrt(MAX(1 - v0, 0) / 2);
+
+    /* rotate the ellipse to align it with axes */
+    float A0 = (A * c * c - B * c * s + C * s * s);
+    float C0 = (A * s * s + B * c * s + C * c * c);
+
+    const float Bt1 = B * (c * c - s * s);
+    const float Bt2 = 2 * (A - C) * c * s;
+    float B0 = Bt1 + Bt2;
+    const float B0v2 = Bt1 - Bt2;
+    if (fabs(B0) > fabs(B0v2)) {
+        s = -s;
+        B0 = B0v2;
+    }
+
+    /* clip A,C */
+    A0 = MIN(A0, 1);
+    C0 = MIN(C0, 1);
+
+    const float sn = -s;
+
+    /* rotate it back */
+    abc[0] = (A0 * c * c - B0 * c * sn + C0 * sn * sn);
+    abc[1] = (2 * A0 * c * sn + B0 * c * c - B0 * sn * sn - 2 * C0 * c * sn);
+    abc[2] = (A0 * sn * sn + B0 * c * sn + C0 * c * c);
+}
+
 // Keys Cubic Filter Family
 // https://imagemagick.org/Usage/filter/#robidoux
 inline float bc2(float x) {
@@ -56,27 +101,58 @@ inline void affine_transform(const float m[6], const float in[2], float out[2]) 
     out[1] = m[3] * in[0] + m[4] * in[1] + m[5];
 }
 
-inline void invert_affine(const float in[6], float out[6]) {
-    float det = in[0] * in[4] - in[1] * in[3];
-    out[0] = in[4] / det;
-    out[4] = in[0] / det;
-    out[1] = -in[1] / det;
-    out[3] = -in[3] / det;
-    out[2] = -out[0] * in[2] - out[1] * in[5];
-    out[5] = -out[3] * in[2] - out[4] * in[5];
-}
-
 inline void affine_bbox(const float in[6], float out[2]) {
     out[0] = 2 * max(fabs(in[0] + in[1]), fabs(in[0] - in[1]));
     out[1] = 2 * max(fabs(in[3] + in[4]), fabs(in[3] - in[4]));
 }
 
-#define MAX(a, b) ((a > b) ? (a) : (b))
-#define MIN(a, b) ((a < b) ? (a) : (b))
+// float2 trans(float x, float y) {
+//     float cx = 1920 / 2., cy = 1080 / 2.;
+//     x -= cx;
+//     y -= cy;
+//     float r2 = sqrt(x * x + y * y);
+//     // if (r2 / 1000 > 1) {
+//     //     float2 r = {-99999, -99999};
+//     //     return r;
+//     // }
+//     float t = atan(r2 / 2000);
+//     // float t = sin(r2 / 1000);
+//     float k = 1 - 1*t;
+//     x *= k * 2;
+//     y *= k * 2;
+//     x += cx;
+//     y += cy;
+//     float2 r = {x / 1920 * 4000, y / 1080 * 3000};
+//     // float2 r = {x * 1 * (x + 200) * (1 / 1300.),
+//     // y * 2 * (y + 1500) * (1 / 2000.) + 50 * sin(x / 100)};
+//     return r;
+// }
+
+float2 trans(float x, float y) {
+    float2 r = {x * 1 * (x + 200) * (1 / 1300.),
+                y * 2 * (y + 1500) * (1 / 2000.) + 50 * sin(x / 100)};
+    return r;
+}
 
 kernel void warp(global const float *in_image, global float *out_image, kernel_args args) {
     uint i = get_global_id(0);
     uint j = get_global_id(1);
+
+    float2 uv = trans(j, i);
+    float2 dx = trans(j + 1e-2, i) - uv;
+    float2 dy = trans(j, i + 1e-2) - uv;
+    float dudx = dx.x / 1e-2;
+    float dudy = dy.x / 1e-2;
+    float dvdx = dx.y / 1e-2;
+    float dvdy = dy.y / 1e-2;
+    float det = dudx * dvdy - dvdx * dudy;
+
+    args.transform[0] = dudx;
+    args.transform[1] = dudy;
+    args.transform[2] = (uv.x - j * dudx - i * dudy);
+    args.transform[3] = dvdx;
+    args.transform[4] = dvdy;
+    args.transform[5] = (uv.y - j * dvdx - i * dvdy);
 
     /* find where the pixel is on source image */
     float cntr_in[2];
@@ -84,38 +160,36 @@ kernel void warp(global const float *in_image, global float *out_image, kernel_a
     affine_transform(args.transform, cntr_out, cntr_in);
     int cntr_int[2] = {round(cntr_in[0]), round(cntr_in[1])};
     float cntr_frac[2] = {cntr_in[0] - cntr_int[0], cntr_in[1] - cntr_int[1]};
-    float transform_inv[6];
-    invert_affine(args.transform, transform_inv);
 
     /* find how many pixels we need around that pixel in each direction */
     float trans_size[2];
     affine_bbox(args.transform, trans_size);
 
     /* find bounding box of samling region in the input image */
-    const int own_minx = MAX(0, floor(cntr_in[0] - trans_size[0] - 1)) - cntr_int[0];
-    const int own_miny = MAX(0, floor(cntr_in[1] - trans_size[1] - 1)) - cntr_int[1];
-    const int own_maxx =
-        MIN(args.in_dim[1] - 1, ceil(cntr_in[0] + trans_size[0] + 1)) - cntr_int[0];
-    const int own_maxy =
-        MIN(args.in_dim[0] - 1, ceil(cntr_in[1] + trans_size[1] + 1)) - cntr_int[1];
+    int own_minx = MAX(0, floor(MIN(cntr_in[0] - trans_size[0] - 1, cntr_in[0] - 2))) - cntr_int[0];
+    int own_miny = MAX(0, floor(MIN(cntr_in[1] - trans_size[1] - 1, cntr_in[1] - 2))) - cntr_int[1];
+    int own_maxx =
+        MIN(args.in_dim[1] - 1, ceil(MAX(cntr_in[0] + trans_size[0] + 1, cntr_in[0] + 2))) -
+        cntr_int[0];
+    int own_maxy =
+        MIN(args.in_dim[1] - 1, ceil(MAX(cntr_in[0] + trans_size[0] + 1, cntr_in[0] + 2))) -
+        cntr_int[0];
 
     int in_x, in_y;
     float3 sum = 0;
     float sum_div = 0;
     // See: Andreas Gustafsson. "Interactive Image Warping", section 3.6
     // http://www.gson.org/thesis/warping-thesis.pdf
-    const float A =
-        MIN(1, transform_inv[0] * transform_inv[0] + transform_inv[3] * transform_inv[3]);
-    const float B = 2 * (transform_inv[0] * transform_inv[1] + transform_inv[3] * transform_inv[4]);
-    const float C =
-        MIN(1, transform_inv[1] * transform_inv[1] + transform_inv[4] * transform_inv[4]);
+    float abc[3];
+    clamped_ellipse(args.transform[0], args.transform[1], args.transform[3], args.transform[4],
+                    abc);
     for (in_y = own_miny; in_y <= own_maxy; ++in_y) {
         const float in_fy = in_y - cntr_frac[1];
-        const float oxy0[2] = {transform_inv[1] * in_y, transform_inv[4] * in_y};
 #pragma unroll
         for (in_x = own_minx; in_x <= own_maxx; ++in_x) {
             const float in_fx = in_x - cntr_frac[0];
-            const float dr = in_fx * in_fx * A + in_fx * in_fy * B + in_fy * in_fy * C;
+            const float dr =
+                in_fx * in_fx * abc[0] + in_fx * in_fy * abc[1] + in_fy * in_fy * abc[2];
             const float k = bc2(sqrt(dr)); // cylindrical filtering
             if (k == 0)
                 continue;
@@ -125,7 +199,8 @@ kernel void warp(global const float *in_image, global float *out_image, kernel_a
             sum_div += k;
         }
     }
-    if (i < args.out_dim[0] && j < args.out_dim[1]) {
+    if (i < args.out_dim[0] && j < args.out_dim[1] && cntr_in[0] < args.in_dim[1] &&
+        cntr_in[1] < args.in_dim[0] && cntr_in[0] >= 0 && cntr_in[1] >= 0) {
         const int p = 3 * (args.out_dim[1] * i + j);
         const float3 v = (sum / sum_div);
         out_image[p + 0] = v[0];
