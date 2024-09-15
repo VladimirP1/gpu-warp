@@ -35,7 +35,7 @@ typedef struct __attribute__((packed)) _args {
 void clamped_ellipse(float m0, float m1, float m2, float m3, float *abc) {
     /* find ellipse */
     const float F0 = fabs(m0 * m3 - m1 * m2);
-    const double F = MAX(0.1, F0 * F0);
+    const float F = MAX(0.1f, F0 * F0);
     const float A = (m2 * m2 + m3 * m3) / F;
     const float B = -2 * (m0 * m2 + m1 * m3) / F;
     const float C = (m0 * m0 + m1 * m1) / F;
@@ -78,20 +78,20 @@ void clamped_ellipse(float m0, float m1, float m2, float m3, float *abc) {
 // https://imagemagick.org/Usage/filter/#robidoux
 inline float bc2(float x) {
     const float B = .3782; // Robidoux filter
-    const float C = (1. - B) / 2.;
-    const float P0 = (6. - 2. * B) / 6.;
+    const float C = (1.f - B) / 2.;
+    const float P0 = (6.f - 2.f * B) / 6.f;
     const float P1 = 0.;
-    const float P2 = (-18. + 12. * B + 6. * C) / 6.;
-    const float P3 = (12. - 9. * B - 6. * C) / 6.;
-    const float Q0 = (8. * B + 24. * C) / 6.;
-    const float Q1 = (-12. * B - 48. * C) / 6.;
-    const float Q2 = (6. * B + 30. * C) / 6.;
-    const float Q3 = (-1. * B - 6. * C) / 6.;
+    const float P2 = (-18.f + 12.f * B + 6.f * C) / 6.f;
+    const float P3 = (12.f - 9.f * B - 6.f * C) / 6.f;
+    const float Q0 = (8.f * B + 24.f * C) / 6.f;
+    const float Q1 = (-12.f * B - 48.f * C) / 6.f;
+    const float Q2 = (6.f * B + 30.f * C) / 6.f;
+    const float Q3 = (-1.f * B - 6.f * C) / 6.f;
     if (x < 0)
         x = -x;
-    if (x < 1.)
+    if (x < 1.f)
         return P0 + P1 * x + P2 * x * x + P3 * x * x * x;
-    if (x < 2.)
+    if (x < 2.f)
         return Q0 + Q1 * x + Q2 * x * x + Q3 * x * x * x;
     return 0.;
 }
@@ -139,12 +139,12 @@ kernel void warp(global const float *in_image, global float *out_image, kernel_a
     uint j = get_global_id(1);
 
     float2 uv = trans(j, i);
-    float2 dx = trans(j + 1e-2, i) - uv;
-    float2 dy = trans(j, i + 1e-2) - uv;
-    float dudx = dx.x / 1e-2;
-    float dudy = dy.x / 1e-2;
-    float dvdx = dx.y / 1e-2;
-    float dvdy = dy.y / 1e-2;
+    float2 dx = trans(j + 1e-2f, i) - uv;
+    float2 dy = trans(j, i + 1e-2f) - uv;
+    float dudx = dx.x / 1e-2f;
+    float dudy = dy.x / 1e-2f;
+    float dvdx = dx.y / 1e-2f;
+    float dvdy = dy.y / 1e-2f;
     float det = dudx * dvdy - dvdx * dudy;
 
     args.transform[0] = dudx;
